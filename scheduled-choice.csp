@@ -1,0 +1,123 @@
+include "alt.csp"
+include "alt-spec.csp"
+include "scheduler.csp"
+
+-- Set of ProcessJ processes.
+Processes = { 0..2 }
+
+-- Define actual processes
+NULL = -1
+W0 = 0
+W1 = 1
+R = 2
+
+-- Set of ProcessJ channels
+Channels = { 0..1 }
+
+-- Set of nullable ProcessJ processes
+Nullable_Processes = union({ NULL }, Processes)
+
+-- Data values. 0 and 1 are distinct different values.
+Values = { 0, 1 }
+
+-- Channel objects used by system
+CHANNELS = ||| c : Channels @ CHANNEL(c)
+
+-- Alphabet of all variable processes
+alphaCHANNELS = Union({alphaCHANNEL(c) | c <- Channels})
+
+PROCESS_WRITER(pid, chan) = 
+    run.pid -> 
+    PROCESS_WRITER'(pid, chan)
+
+PROCESS_WRITER'(pid, chan) = 
+    write.chan.pid?message ->
+    WRITE(pid, chan, message);       -- c.write(message);
+    YIELD(pid);                      -- yield(1);
+    ack.chan.pid ->                  -- acknowledge to the environment we are done.
+    PROCESS_WRITER'(pid, chan)       -- recurse to take a new message (simulate jump to L1)
+
+alphaPROCESS_WRITER(pid, chan) = 
+    union(alphaWRITE(pid, chan), 
+        {   
+            run.pid,
+            write.chan.pid.d,
+            yield.pid, 
+            ack.chan.pid
+            | d <- Values
+        })
+
+PROCESS_SELECTOR(pid) =
+    run.pid ->
+    PROCESS_SELECTOR'(pid)
+
+PROCESS_SELECTOR'(pid) =
+    ready.pid.set!false ->
+    select.pid ->
+    ENABLE(pid);
+    YIELD(pid);
+    DISABLE(pid);
+    selected.get?idx ->
+    start_read.idx.pid ->
+    READ(idx);
+    selected.get?idx ->
+    data.idx.get?message ->
+    read.idx.pid!message ->
+    PROCESS_SELECTOR'(pid)
+
+alphaPROCESS_SELECTOR(pid) = Union(
+{
+    alphaENABLE(pid),
+    alphaDISABLE(pid),
+    Union({ alphaREAD(c) | c <- Channels }),
+    {
+        run.pid,
+        yield.pid,
+        select.pid,
+        ready.pid.set.false,
+        selected.get.c,
+        start_read.c.pid,
+        read.c.pid.v
+        | c <- Channels, v <- Values
+    }
+})
+
+ALT_SYSTEM = 
+(
+    (CHANNELS ||| ALT_VARIABLES)
+    [| union(diff(alphaCHANNELS, { ready.p.get.b | p <- Processes, b <- Bool }), alphaALT_VARIABLES) |]
+    (PROCESS_WRITER(W0, 0) ||| PROCESS_WRITER(W1, 1) ||| PROCESS_SELECTOR(R))
+) \ union(alphaCHANNELS, alphaALT_VARIABLES)
+
+SCHEDULED_ALT_SYSTEM(schedule) = 
+(
+    ALT_SYSTEM
+    [| alphaN_SCHEDULER_SYSTEM |]
+    N_SCHEDULER_SYSTEM(1, schedule)
+) \ alphaN_SCHEDULER_SYSTEM
+
+assert SCHEDULED_ALT_SYSTEM(<0, 1, 2>) :[deadlock free[FD]]
+assert SCHEDULED_ALT_SYSTEM(<0, 2, 1>) :[deadlock free[FD]]
+assert SCHEDULED_ALT_SYSTEM(<1, 0, 2>) :[deadlock free[FD]]
+assert SCHEDULED_ALT_SYSTEM(<1, 2, 0>) :[deadlock free[FD]]
+assert SCHEDULED_ALT_SYSTEM(<2, 0, 1>) :[deadlock free[FD]]
+assert SCHEDULED_ALT_SYSTEM(<2, 1, 0>) :[deadlock free[FD]]
+assert SCHEDULED_ALT_SYSTEM(<0, 1, 2>) :[divergence free[FD]]
+assert SCHEDULED_ALT_SYSTEM(<0, 2, 1>) :[divergence free[FD]]
+assert SCHEDULED_ALT_SYSTEM(<1, 0, 2>) :[divergence free[FD]]
+assert SCHEDULED_ALT_SYSTEM(<1, 2, 0>) :[divergence free[FD]]
+assert SCHEDULED_ALT_SYSTEM(<2, 0, 1>) :[divergence free[FD]]
+assert SCHEDULED_ALT_SYSTEM(<2, 1, 0>) :[divergence free[FD]]
+assert SCHEDULED_ALT_SYSTEM(<0, 1, 2>) :[deterministic[FD]]
+assert SCHEDULED_ALT_SYSTEM(<0, 2, 1>) :[deterministic[FD]]
+assert SCHEDULED_ALT_SYSTEM(<1, 0, 2>) :[deterministic[FD]]
+assert SCHEDULED_ALT_SYSTEM(<1, 2, 0>) :[deterministic[FD]]
+assert SCHEDULED_ALT_SYSTEM(<2, 0, 1>) :[deterministic[FD]]
+assert SCHEDULED_ALT_SYSTEM(<2, 1, 0>) :[deterministic[FD]]
+
+assert ALT_SPEC_SYSTEM(R) [T= SCHEDULED_ALT_SYSTEM(<0, 1, 2>)
+assert ALT_SPEC_SYSTEM(R) [T= SCHEDULED_ALT_SYSTEM(<0, 2, 1>)
+assert ALT_SPEC_SYSTEM(R) [T= SCHEDULED_ALT_SYSTEM(<1, 0, 2>)
+assert ALT_SPEC_SYSTEM(R) [T= SCHEDULED_ALT_SYSTEM(<1, 2, 0>)
+assert ALT_SPEC_SYSTEM(R) [T= SCHEDULED_ALT_SYSTEM(<2, 0, 1>)
+assert ALT_SPEC_SYSTEM(R) [T= SCHEDULED_ALT_SYSTEM(<2, 1, 0>)

@@ -1,0 +1,106 @@
+include "alt.csp"
+include "alt-spec.csp"
+include "scheduler.csp"
+
+-- Set of ProcessJ processes.
+Processes = { 0..2 }
+
+-- Define actual processes
+NULL = -1
+W0 = 0
+W1 = 1
+R = 2
+
+-- Set of ProcessJ channels
+Channels = { 0..1 }
+
+-- Set of nullable ProcessJ processes
+Nullable_Processes = union({ NULL }, Processes)
+
+-- Data values. 0 and 1 are distinct different values.
+Values = { 0, 1 }
+
+READY_YIELD(pid) = ready.pid.get.true -> SKIP
+
+-- VARIABLES
+
+PROTECTED_CHANNELS = ||| c : Channels @ (CHANNEL(c) ||| MONITOR(c))
+
+alphaPROTECTED_CHANNELS = 
+    union(
+        Union({alphaCHANNEL(c) | c <- Channels}),
+		Union({alphaMONITOR(c) | c <- Channels}))
+
+-- PROTECTED WRITING PROCESS
+
+PROTECTED_PROCESS_WRITER(pid, chan) =
+    write.chan.pid?message ->
+    claim.chan!pid ->
+    WRITE(pid, chan, message);
+    release.chan.pid ->
+    READY_YIELD(pid);
+    ack.chan.pid ->
+    PROTECTED_PROCESS_WRITER(pid, chan)
+
+alphaPROTECTED_PROCESS_WRITER(pid, chan) = 
+    union(alphaWRITE(pid, chan), 
+        {
+            write.chan.pid.v,
+            ack.chan.pid, 
+            claim.chan.pid,
+            release.chan.pid
+            | v <- Values
+        })
+
+PROTECTED_PROCESS_SELECTOR(pid) =
+    ready.pid.set!false ->
+    select.pid ->
+    PROTECTED_ENABLE(pid);
+    READY_YIELD(pid);
+    PROTECTED_DISABLE(pid);
+    selected.get?idx ->
+    start_read.idx.pid ->
+    claim.idx.pid ->
+    READ(idx);
+    selected.get?idx ->
+    data.idx.get?message ->
+    release.idx!pid ->
+    read.idx.pid!message ->
+    PROTECTED_PROCESS_SELECTOR(pid)
+
+alphaPROTECTED_PROCESS_SELECTOR(pid) = Union(
+{
+    alphaPROTECTED_ENABLE(pid),
+    alphaPROTECTED_DISABLE(pid),
+    Union({ alphaREAD(c) | c <- Channels }),
+    {
+        select.pid,
+        ready.pid.set.false,
+        selected.get.c,
+        start_read.c.pid,
+        read.c.pid.v,
+        claim.c.pid,
+        release.c.pid
+        | c <- Channels, v <- Values
+    }
+})
+
+PROTECTED_ALT_SYSTEM = 
+(
+    (PROTECTED_CHANNELS ||| ALT_VARIABLES)
+    [| union(diff(alphaPROTECTED_CHANNELS, { ready.p.get.b | p <- Processes, b <- Bool }), alphaALT_VARIABLES) |]
+    (PROTECTED_PROCESS_WRITER(W0, 0) ||| PROTECTED_PROCESS_WRITER(W1, 1) ||| PROTECTED_PROCESS_SELECTOR(R))
+) \ union(alphaPROTECTED_CHANNELS, alphaALT_VARIABLES)
+
+PROTECTED_INFINITE_ALT_SYSTEM = 
+(
+    PROTECTED_ALT_SYSTEM
+    [| alphaREADY_FLAGS |]
+    READY_FLAGS
+) \ alphaREADY_FLAGS
+
+assert PROTECTED_INFINITE_ALT_SYSTEM :[deadlock free[FD]]
+assert PROTECTED_INFINITE_ALT_SYSTEM :[divergence free[FD]]
+assert not PROTECTED_INFINITE_ALT_SYSTEM :[deterministic[FD]]
+assert ALT_SPEC_SYSTEM(R) [FD= PROTECTED_INFINITE_ALT_SYSTEM
+assert PROTECTED_INFINITE_ALT_SYSTEM [FD= ALT_SPEC_SYSTEM(R)

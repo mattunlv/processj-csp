@@ -1,0 +1,179 @@
+include "channel.csp"
+include "channel-spec.csp"
+include "scheduler.csp"
+include "monitor.csp"
+
+-- Set of ProcessJ processes.
+Processes = { 0, 1 }
+NULL = -1
+
+-- Set of ProcessJ channels.
+Channels = { 0 }
+
+-- Set of nullable ProcessJ processes.
+Nullable_Processes = union({NULL}, Processes)
+
+-- Data values. 0 and 1 are distinct different values.
+Values = { 0, 1 }
+
+PROTECTED_CHANNELS = ||| c : Channels @ (CHANNEL(c) ||| MONITOR(c))
+
+alphaPROTECTED_CHANNELS = 
+    union(
+        Union({alphaCHANNEL(c) | c <- Channels}),
+		Union({alphaMONITOR(c) | c <- Channels}))
+
+-- PROTECTED READING AND WRITING PROCESSES
+
+PROTECTED_PROCESS_WRITER(pid, chan) = run.pid -> PROTECTED_PROCESS_WRITER'(pid, chan)
+
+PROTECTED_PROCESS_WRITER'(pid, chan) =
+    write.chan.pid?message ->
+    claim.chan!pid ->
+    WRITE(pid, chan, message);
+    release.chan.pid ->
+    YIELD(pid);
+    ack.chan.pid ->
+    PROTECTED_PROCESS_WRITER'(pid, chan)
+
+alphaPROTECTED_PROCESS_WRITER(pid, chan) = 
+    union(alphaWRITE(pid, chan), 
+        {
+            write.chan.pid.v,
+            ack.chan.pid, 
+            yield.pid, 
+            run.pid,
+            claim.chan.pid,
+            release.chan.pid
+            | v <- Values
+        })
+
+PROTECTED_PROCESS_READER(pid, chan) = run.pid -> PROTECTED_PROCESS_READER'(pid, chan)
+
+PROTECTED_PROCESS_READER'(pid, chan) = 
+    start_read.chan.pid ->
+    claim.chan!pid ->                -- 'synchronized' of isReadyToRead() (claim the monitor)
+    writer.chan.get?p ->
+    (if (p == -1) then               -- writer != null                         
+        reader.chan.set.pid ->         -- reader = this;            [done in isReadyToRead()]
+        ready.pid.set!false ->
+        release.chan.pid ->           -- release the monitor
+        YIELD(pid);
+        SKIP
+    else
+        release.chan.pid ->           -- release the monitor
+        SKIP
+    );
+    claim.chan!pid ->             -- 'synchronized' of read() (claim the monitor)
+    READ(chan);              -- c.read();
+    data.chan.get?message ->      -- (4) T myData = data;    [lifted out of read()]
+    let                           -- Silly trick to retain message in scope 
+        m = message                 -- Necessary because of the YIELD call.
+    within
+        release.chan.pid ->           -- release the monitor
+        YIELD(pid);                   -- yield()
+        read.chan.pid!m ->            -- (6) deliver the message to the environment
+        PROTECTED_PROCESS_READER'(pid, chan)    -- Recurse to start over (simulate jump to L2)
+
+alphaPROTECTED_PROCESS_READER(pid, chan) = 
+    union(alphaREAD(chan), 
+        {
+            start_read.chan.pid, 
+            data.chan.get.v, 
+            read.chan.pid.v, 
+            writer.chan.get.np,
+            reader.chan.set.pid, 
+            ready.pid.set.false, 
+            yield.pid, 
+            run.pid, 
+            claim.chan.pid, 
+            release.chan.pid
+            | v <- Values, np <- Nullable_Processes
+        })
+
+PROTECTED_READER_WRITER(pid, pid', chan) = 
+    PROTECTED_PROCESS_WRITER(pid, chan) ||| PROTECTED_PROCESS_READER(pid', chan)
+
+alphaPROTECTED_READER_WRITER(pid, pid', chan) = 
+    union(alphaPROTECTED_PROCESS_WRITER(pid, chan), alphaPROTECTED_PROCESS_READER(pid', chan))
+
+PROTECTED_PJ_CHAN_SYSTEM(pid, pid', chan) =
+(
+    PROTECTED_READER_WRITER(pid, pid', chan)
+    [| alphaPROTECTED_CHANNELS |]
+    PROTECTED_CHANNELS
+) \ alphaPROTECTED_CHANNELS
+
+PROTECTED_SCHEDULED_PJ_CHAN_SYSTEM(pid, pid', chan, n, schedule) = 
+(
+    PROTECTED_PJ_CHAN_SYSTEM(pid, pid', chan) 
+    [| alphaN_SCHEDULER_SYSTEM |]
+    N_SCHEDULER_SYSTEM(n, schedule)
+) \ alphaN_SCHEDULER_SYSTEM
+
+-- Protected channels should still be deadlock free and deterministice with one scheduler.
+
+assert PROTECTED_SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, 1, <0,1>) :[deadlock free[FD]]
+assert PROTECTED_SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, 1, <1,0>) :[deadlock free[FD]]
+
+assert PROTECTED_SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, 1, <0,1>) :[divergence free[FD]]
+assert PROTECTED_SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, 1, <1,0>) :[divergence free[FD]]
+
+assert PROTECTED_SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, 1, <0,1>) :[deterministic[FD]]
+assert PROTECTED_SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, 1, <1,0>) :[deterministic[FD]]
+
+-- However, will fail in FD when two schedulers as one scheduler will spin when waiting for something to be ready.
+
+assert not PROTECTED_SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, 2, <0,1>) :[deadlock free[FD]]
+assert not PROTECTED_SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, 2, <1,0>) :[deadlock free[FD]]
+
+assert not PROTECTED_SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, 2, <0,1>) :[divergence free[FD]]
+assert not PROTECTED_SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, 2, <1,0>) :[divergence free[FD]]
+
+assert not PROTECTED_SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, 2, <0,1>) :[deterministic[FD]]
+assert not PROTECTED_SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, 2, <1,0>) :[deterministic[FD]]
+
+-- But they will pass in just the F model.
+
+assert PROTECTED_SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, 2, <0,1>) :[deadlock free[F]]
+assert PROTECTED_SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, 2, <1,0>) :[deadlock free[F]]
+
+assert PROTECTED_SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, 2, <0,1>) :[deterministic[F]]
+assert PROTECTED_SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, 2, <1,0>) :[deterministic[F]]
+
+-- Test to see still refines in trace model with protection and single scheduler.
+
+assert GENERIC_CHANNEL(0, 1, 0) [T= PROTECTED_SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, 1, <0,1>)
+assert GENERIC_CHANNEL(0, 1, 0) [T= PROTECTED_SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, 1, <1,0>)
+
+-- Can now verify in failures, and both ways in traces
+
+assert GENERIC_CHANNEL(0, 1, 0) [T= PROTECTED_SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, 2, <0,1>)
+assert GENERIC_CHANNEL(0, 1, 0) [T= PROTECTED_SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, 2, <1,0>)
+assert GENERIC_CHANNEL(0, 1, 0) [F= PROTECTED_SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, 2, <0,1>)
+assert GENERIC_CHANNEL(0, 1, 0) [F= PROTECTED_SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, 2, <1,0>)
+
+assert PROTECTED_SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, 2, <0,1>) [T= GENERIC_CHANNEL(0, 1, 0)
+assert PROTECTED_SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, 2, <1,0>) [T= GENERIC_CHANNEL(0, 1, 0)
+
+-- these still fail because read and write are scheduled, and therefore may not be ready at the same time.
+assert not PROTECTED_SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, 2, <0,1>) [F= GENERIC_CHANNEL(0, 1, 0)
+assert not PROTECTED_SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, 2, <1,0>) [F= GENERIC_CHANNEL(0, 1, 0)
+
+-- VERIFICATION OF FOUR SCHEDULER SYSTEM
+
+assert PROTECTED_SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, 4, <0,1>) :[deadlock free[F]]
+assert PROTECTED_SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, 4, <1,0>) :[deadlock free[F]]
+
+assert PROTECTED_SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, 4, <0,1>) :[deterministic[F]]
+assert PROTECTED_SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, 4, <1,0>) :[deterministic[F]]
+
+-- Can now verify in failures, and both ways in traces
+
+assert GENERIC_CHANNEL(0, 1, 0) [T= PROTECTED_SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, 4, <0,1>)
+assert GENERIC_CHANNEL(0, 1, 0) [T= PROTECTED_SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, 4, <1,0>)
+assert GENERIC_CHANNEL(0, 1, 0) [F= PROTECTED_SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, 4, <0,1>)
+assert GENERIC_CHANNEL(0, 1, 0) [F= PROTECTED_SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, 4, <1,0>)
+
+assert PROTECTED_SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, 4, <0,1>) [T= GENERIC_CHANNEL(0, 1, 0)
+assert PROTECTED_SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, 4, <1,0>) [T= GENERIC_CHANNEL(0, 1, 0)

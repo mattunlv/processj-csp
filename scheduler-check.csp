@@ -1,0 +1,83 @@
+include "scheduler.csp"
+
+-- The set of processes to be scheduled
+Processes = { 0..2 }
+
+-- WORK SYSTEM SPECIFICATION
+
+-- Channel that is used to simulate work.
+-- This channel will be used by a process when it is processing work.  This is used to 
+-- check for single-threaded behaviour.
+channel work : Processes
+
+-- Specficiation of how the scheduling should operate for a single-processor system. 
+-- The SP_SYSTEM process non-deterministically selects a process, then performs three work
+-- operations before recursing.  Thus the behaviour is as if a process is scheduled, 
+-- undertakes some work, and then is descheduled.
+-- Three work operations are chosen to test for work interleaving.
+SP_SYSTEM = |~| p : Processes @ work.p -> work.p -> work.p -> SP_SYSTEM
+
+-- Specification of a multi-processor scheduling.
+-- This will interleave work events of any sequence.
+MP_SYSTEM = |~| p : Processes @ work.p -> MP_SYSTEM
+
+assert MP_SYSTEM [T= SP_SYSTEM
+assert not SP_SYSTEM [T= MP_SYSTEM
+
+-- PROCESSES IMPLEMENTATION
+
+PROCESS(pid) = run.pid -> PROCESS'(pid, 0)
+PROCESS'(pid, n) =
+    if n < 3 then
+        (work.pid -> PROCESS'(pid, n + 1))
+        []
+        ([] p : Processes @ ready.p.set!true -> PROCESS'(pid, n))
+    else
+        (( ready.pid.set!false -> SKIP [] SKIP ); YIELD(pid); PROCESS'(pid, 0))
+
+-- Alphabet for all processes
+alphaPROCESS(pid) = {ready.p.set.b, work.pid, run.pid, yield.pid | p <- Processes, b <- Bool}
+
+-- All processes running together with the ready flags.
+-- Processes do not synchronise with each other, but via the ready flags.  Therefore,
+-- processes are interleaved.
+PROCESSES =
+    ||| p : Processes @ PROCESS(p)
+
+-- Alphabet for all processes
+alphaPROCESSES = Union({alphaPROCESS(p) | p <- Processes})
+
+-- First check.
+-- Does SP_WORK **not** contain the behaviour of the processes.
+-- This is expected as PROCESSES is not controlled to perform single-threaded behaviour, 
+-- so can interleave work events.
+assert not SP_SYSTEM [F= PROCESSES \ alphaPRIVATE_PROCESSES
+-- Second check
+-- Does multi-threaded work contain the behaviour of the processes.
+-- This is expected given the above.
+assert MP_SYSTEM [F= PROCESSES \ alphaPRIVATE_PROCESSES
+
+-- SCHEDULED PROCESSES
+
+-- SCHEDULED_PROCESSES is the scheduler system running alongside the processes.
+-- This means that ready events are controlled by the scheduler, and thus have a contolled order.
+SCHEDULED_PROCESSES(N) =
+(
+    N_SCHEDULER_SYSTEM(N, <0, 1, 2>)
+    [| alphaN_SCHEDULER_SYSTEM |]
+    PROCESSES
+) \ alphaPRIVATE_PROCESSES
+
+-- Check that behaviour of work is modelled by scheduled processes.
+-- This will pass if the scheduler enforces the single-threaded behaviour - there will be no interleaving of work events.
+assert SP_SYSTEM [F= SCHEDULED_PROCESSES(1)
+assert SCHEDULED_PROCESSES(1) :[deadlock free[F]]
+assert SCHEDULED_PROCESSES(1) :[deterministic]
+assert not SP_SYSTEM [F= SCHEDULED_PROCESSES(2)
+assert MP_SYSTEM [F= SCHEDULED_PROCESSES(2)
+assert SCHEDULED_PROCESSES(2) :[deadlock free[F]]
+assert SCHEDULED_PROCESSES(2) :[deterministic]
+assert not SP_SYSTEM [F= SCHEDULED_PROCESSES(4)
+assert MP_SYSTEM [F= SCHEDULED_PROCESSES(4)
+assert SCHEDULED_PROCESSES(4) :[deadlock free[F]]
+assert SCHEDULED_PROCESSES(4) :[deterministic]

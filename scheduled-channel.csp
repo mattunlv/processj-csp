@@ -1,0 +1,121 @@
+include "channel.csp"
+include "channel-spec.csp"
+include "scheduler.csp"
+
+-- Set of ProcessJ processes.
+Processes = { 0, 1 }
+
+NULL = -1
+
+-- Set of nullable ProcessJ processes.
+Nullable_Processes = union({NULL}, Processes)
+
+-- Set of ProcessJ channels.
+Channels = { 0 }
+
+-- Data values. 0 and 1 are distinct different values.
+Values = { 0, 1 }
+
+-- Channel objects used by system
+CHANNELS = ||| c : Channels @ CHANNEL(c)
+
+-- Alphabet of all variable processes
+alphaCHANNELS = Union({alphaCHANNEL(c) | c <- Channels})
+
+-- READING AND WRITING PROCESSES USING CHANNELS
+
+PROCESS_WRITER(pid, chan) = 
+    run.pid -> 
+    PROCESS_WRITER'(pid, chan)
+
+PROCESS_WRITER'(pid, chan) = 
+    write.chan.pid?message ->
+    WRITE(pid, chan, message);       -- c.write(message);
+    YIELD(pid);                      -- yield(1);
+    ack.chan.pid ->                  -- acknowledge to the environment we are done.
+    PROCESS_WRITER'(pid, chan)       -- recurse to take a new message (simulate jump to L1)
+
+alphaPROCESS_WRITER(pid, chan) = 
+    union(alphaWRITE(pid, chan), 
+        {   
+            run.pid,
+            write.chan.pid.d,
+            yield.pid, 
+            ack.chan.pid
+            | d <- Values
+        })
+
+PROCESS_READER(pid, chan) = 
+    run.pid -> 
+    PROCESS_READER'(pid, chan)
+
+PROCESS_READER'(pid, chan) = 
+    start_read.chan.pid ->
+    writer.chan.get?p ->
+    (
+        if (p == -1) then                  -- writer != null
+            reader.chan.set.pid ->         -- reader = this;
+            ready.pid.set!false ->
+            YIELD(pid);
+            SKIP
+        else
+            SKIP
+    );
+    READ(chan);              -- c.read();
+    data.chan.get?message ->      -- (4) T myData = data;    [lifted out of read()]
+    let                           -- Silly trick to retain message in scope 
+        m = message                 -- Necessary because of the YIELD call.
+    within
+        YIELD(pid);                   -- yield()
+        read.chan.pid!m ->            -- (6) deliver the message to the environment
+        PROCESS_READER'(pid, chan)    -- Recurse to start over (simulate jump to L2)
+
+alphaPROCESS_READER(pid, chan) = 
+    union(alphaREAD(chan), 
+        {
+            start_read.chan.pid, 
+            data.chan.get.val, 
+            read.chan.pid.val, 
+            writer.chan.get.np,
+            reader.chan.set.pid, 
+            ready.pid.set.false, 
+            yield.pid, 
+            run.pid
+            | val <- Values, np <- Nullable_Processes
+        })
+
+READER_WRITER(pid, pid', chan) = PROCESS_WRITER(pid, chan) ||| PROCESS_READER(pid', chan)
+
+alphaREADER_WRITER(pid, pid', chan) = 
+    union(alphaPROCESS_WRITER(pid, chan), alphaPROCESS_READER(pid', chan))
+
+PJ_CHAN_SYSTEM(pid, pid', chan) =
+(
+    READER_WRITER(pid, pid', chan)
+    [| alphaCHANNELS |]
+    CHANNELS
+) \ alphaCHANNELS
+
+SCHEDULED_PJ_CHAN_SYSTEM(pid, pid', chan, schedule) =
+(
+    PJ_CHAN_SYSTEM(pid, pid', chan)
+    [| alphaN_SCHEDULER_SYSTEM |]
+    N_SCHEDULER_SYSTEM(1, schedule)
+) \ alphaN_SCHEDULER_SYSTEM
+
+-- SINGLE PROCESSOR SYSTEM DEFINITION
+
+-- Scheduled channel is deadlock free and deterministic in failures and divergences
+assert SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, <0, 1>) :[deadlock free[FD]]
+assert SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, <1, 0>) :[deadlock free[FD]]
+assert SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, <0, 1>) :[deterministic[FD]]
+assert SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, <1, 0>) :[deterministic[FD]]
+assert SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, <0, 1>) :[divergence free[FD]]
+assert SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, <1, 0>) :[divergence free[FD]]
+
+assert GENERIC_CHANNEL(0, 1, 0) [T= SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, <0, 1>)
+assert GENERIC_CHANNEL(0, 1, 0) [T= SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, <1, 0>)
+
+assert SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, <0, 1>) [T= GENERIC_CHANNEL(0, 1, 0)
+assert SCHEDULED_PJ_CHAN_SYSTEM(0, 1, 0, <1, 0>) [T= GENERIC_CHANNEL(0, 1, 0)
+
