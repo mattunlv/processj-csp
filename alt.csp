@@ -16,84 +16,28 @@ alphaALT_VARIABLES =
 
 -- ALT
 
-ENABLE_LOOP(pid) =                          -- enable() {
-    i.get?idx ->                            --   load 'i'
-    writer.idx.get?w ->                     --   load 'writer'
-    if w != NULL then                       --   if (writer != NULL) {
-        ready.pid.set!true ->               --     this.setReady();
-        SKIP            
-    else                                    --   } else {
-        reader.idx.set!pid ->               --     reader = this;
-        if idx < card(Channels) - 1 then    --     if (i < channels.length) then
-            i.set!(idx + 1) ->              --       i = i + 1;
-            ENABLE_LOOP(pid)                --       enable();
-        else                                --   }
-            SKIP                            -- }  
-
-ENABLE(pid) = ENABLE_LOOP(pid)
-
-alphaENABLE(pid) = 
-{
-    i.op.c,
-    writer.c.get.np,
-    ready.pid.set.true,
-    reader.c.set.pid
-    | op <- Operations, c <- Channels, np <- Nullable_Processes
-}
-
-DISABLE_LOOP(pid) =                -- disable() {
-    i.get?idx ->                   --   load 'i'
-    writer.idx.get?w ->            --   load 'writer'
-    reader.idx.set!NULL ->         --   reader = null;
-    (
-        if w != NULL then          --   if (writer != NULL) {
-            selected.set!idx ->    --     selected = i;
-            SKIP                   --   }
-        else
-            SKIP
-    );
-    i.get?idx ->                   --   reload 'i'
-    if idx > 0 then                --   if (i >0) { 
-        i.set!(idx - 1) ->         --     i = i - 1;
-        DISABLE_LOOP(pid)          --     diable();
-    else                           --   } else {
-        selected.get?idx ->        --       load 'selected'
-        return!idx ->              --          ///// WHY do we return it on a channel - can't we just read selected in the usage process??
-        SKIP
-
-DISABLE(pid) = DISABLE_LOOP(pid)
-
-alphaDISABLE(pid) =
-{
-    i.op.c,
-    writer.c.get.np,
-    reader.c.set.NULL,
-    selected.set.c
-    | op <- Operations, c <- Channels, np <- Nullable_Processes
-}
-
--- ALT
-
-PROTECTED_ENABLE_LOOP(pid) = 
+ENABLE_LOOP(pid) = 
     i.get?idx ->
     claim.idx.pid ->
     writer.idx.get?w ->
-    if w != NULL then
+    if (w != NULL) then
         release.idx!pid ->
         ready.pid.set!true ->
         SKIP
     else
         reader.idx.set!pid ->
         release.idx!pid ->
-        if idx < card(Channels) - 1 then
+        if (idx < card(Channels) - 1) then
             i.set!(idx + 1) ->
-            PROTECTED_ENABLE_LOOP(pid)
+            ENABLE_LOOP(pid)
         else
             SKIP
 
-PROTECTED_ENABLE(pid) = PROTECTED_ENABLE_LOOP(pid)
+ENABLE(pid) = 
+    i.set!0 ->
+    ENABLE_LOOP(pid)
 
-alphaPROTECTED_ENABLE(pid) = 
+alphaENABLE(pid) = 
 {
     i.op.c,
     writer.c.get.np,
@@ -104,31 +48,29 @@ alphaPROTECTED_ENABLE(pid) =
     | op <- Operations, c <- Channels, np <- Nullable_Processes
 }
 
-PROTECTED_DISABLE_LOOP(pid) =
+DISABLE_LOOP(pid) =
     i.get?idx ->
     claim.idx.pid ->
     writer.idx.get?w ->
     reader.idx.set!NULL ->
     release.idx!pid ->
     (
-        if w != NULL then
+        if (w != NULL) then
             selected.set!idx ->
             SKIP
         else
             SKIP
     );
     i.get?idx ->
-    if idx > 0 then
+    if (idx > 0) then
         i.set!(idx - 1) ->
-        PROTECTED_DISABLE_LOOP(pid)
+        DISABLE_LOOP(pid)
     else
-        selected.get?idx ->
-        return!idx ->
         SKIP
 
-PROTECTED_DISABLE(pid) = PROTECTED_DISABLE_LOOP(pid)
+DISABLE(pid) = DISABLE_LOOP(pid)
 
-alphaPROTECTED_DISABLE(pid) =
+alphaDISABLE(pid) =
 {
     i.op.c,
     writer.c.get.np,

@@ -12,7 +12,9 @@ channel data : Channels.Operations.Values
 -- Requires the channel number
 CHANNEL :: (Int) -> Proc
 CHANNEL(chan) =
-    VARIABLE(writer.chan, -1) ||| VARIABLE(reader.chan, -1) ||| VARIABLE(data.chan, 0)
+    VARIABLE(writer.chan, NULL) 
+    ||| VARIABLE(reader.chan, NULL) 
+    ||| VARIABLE(data.chan, 0)
 
 alphaCHANNEL(chan) =
 {
@@ -29,7 +31,7 @@ WRITE(pid, chan, item) =
     writer.chan.set!pid ->        -- (2) writer = p;
     ready.pid.set!false ->
     reader.chan.get?v ->
-    if (v != -1) then
+    if (v != NULL) then
         ready.v.set!true -> SKIP
     else
         SKIP
@@ -46,11 +48,11 @@ alphaWRITE(pid, chan) =
 
 READ(chan) = 
     writer.chan.get?w ->        -- (1) get the 'writer' field.
-    if w == NULL then STOP
+    if (w == NULL) then STOP
     else
         ready.w.set!true ->         -- (1) writer.setReady();
-        writer.chan.set!-1 ->       -- moved (2) writer = null;
-        reader.chan.set!-1 ->       -- moved (3) reader = null;
+        writer.chan.set!NULL ->       -- moved (2) writer = null;
+        reader.chan.set!NULL ->       -- moved (3) reader = null;
         SKIP
 
 alphaREAD(chan) =

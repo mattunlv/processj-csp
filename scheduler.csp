@@ -15,9 +15,15 @@ channel push, pop, run, yield : Processes
 
 -- QUEUE SPECIFICATION
 QUEUE(q) = 
-    (if length(q) >= card(Processes) then STOP else (push?v -> QUEUE(concat(<q, <v>>))))
-    []
-    (if length(q) == 0 then STOP else (pop!head(q) -> QUEUE(tail(q))))
+(
+    if (length(q) >= card(Processes)) then STOP 
+    else (push?v -> QUEUE(concat(<q, <v>>)))
+)
+[]
+(
+    if (length(q) == 0) then STOP 
+    else (pop!head(q) -> QUEUE(tail(q)))
+)
 
 -- Alphabet of queue
 alphaQUEUE = {push.p, pop.p | p <- Processes}
@@ -27,10 +33,16 @@ alphaQUEUE = {push.p, pop.p | p <- Processes}
 -- then not accepting another until the equivalent yield occurs.  It can during 
 -- The process allowed to run is the one retrieved from the queue.
 SCHEDULER =
-    pop?p ->
-    ready.p.get?s ->
-    if s then (run.p -> yield.p -> push!p -> SCHEDULER)
-    else (push!p -> SCHEDULER)
+    pop?pid ->
+    ready.pid.get?s ->
+    if (s) then
+        run.pid -> 
+        yield.pid -> 
+        push!pid -> 
+        SCHEDULER
+    else
+        push!pid -> 
+        SCHEDULER
 
 alphaSCHEDULER = 
 {
@@ -67,9 +79,4 @@ alphaN_SCHEDULER_SYSTEM =
     | p <- Processes, b <- Bool
 }
 
-print alphaN_SCHEDULER_SYSTEM
-
 YIELD(pid) = yield.pid -> run.pid -> SKIP
-
--- Private events within processes
-alphaPRIVATE_PROCESSES = {ready.p.o.b, run.p, yield.p | p <- Processes, o <- Operations, b <- Bool}

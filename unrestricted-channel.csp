@@ -1,6 +1,6 @@
-include "channel.csp"
+include "variables.csp"
 include "channel-spec.csp"
-include "scheduler.csp"
+include "channel.csp"
 include "monitor.csp"
 
 -- Set of ProcessJ processes.
@@ -16,27 +16,36 @@ Nullable_Processes = union({NULL}, Processes)
 -- Data values. 0 and 1 are distinct different values.
 Values = { 0, 1 }
 
-READY_YIELD(pid) = ready.pid.get.true -> SKIP
+channel ready : Processes.Operations.Bool
 
-PROTECTED_CHANNELS = ||| c : Channels @ (CHANNEL(c) ||| MONITOR(c))
+-- Alphabet of the ready flags
+alphaREADY = Union({alphaVARIABLE(ready.p, Bool) | p <- Processes})
 
-alphaPROTECTED_CHANNELS = 
+READY_FLAGS = ||| p : Processes @ VARIABLE(ready.p, true)
+
+alphaREADY_FLAGS = Union({alphaVARIABLE(ready.p, Bool) | p <- Processes})
+
+YIELD(pid) = ready.pid.get.true -> SKIP
+
+CHANNELS = ||| c : Channels @ (CHANNEL(c) ||| MONITOR(c))
+
+alphaCHANNELS = 
     union(
         Union({alphaCHANNEL(c) | c <- Channels}),
 		Union({alphaMONITOR(c) | c <- Channels}))
 
 -- PROTECTED READING AND WRITING PROCESSES
 
-PROTECTED_PROCESS_WRITER(pid, chan) =
+UNRESTRICTED_PROCESS_WRITER(pid, chan) =
     write.chan.pid?message ->
     claim.chan!pid ->
     WRITE(pid, chan, message);
     release.chan.pid ->
-    READY_YIELD(pid);
+    YIELD(pid);
     ack.chan.pid ->
-    PROTECTED_PROCESS_WRITER(pid, chan)
+    UNRESTRICTED_PROCESS_WRITER(pid, chan)
 
-alphaPROTECTED_PROCESS_WRITER(pid, chan) = 
+alphaUNRESTRICTED_PROCESS_WRITER(pid, chan) = 
     union(alphaWRITE(pid, chan), 
         {
             write.chan.pid.v,
@@ -46,7 +55,7 @@ alphaPROTECTED_PROCESS_WRITER(pid, chan) =
             | v <- Values
         })
 
-PROTECTED_PROCESS_READER(pid, chan) = 
+UNRESTRICTED_PROCESS_READER(pid, chan) = 
     start_read.chan.pid ->
     claim.chan!pid ->                -- 'synchronized' of isReadyToRead() (claim the monitor)
     writer.chan.get?p ->
@@ -54,7 +63,7 @@ PROTECTED_PROCESS_READER(pid, chan) =
         reader.chan.set.pid ->         -- reader = this;            [done in isReadyToRead()]
         ready.pid.set!false ->
         release.chan.pid ->           -- release the monitor
-        READY_YIELD(pid);
+        YIELD(pid);
         SKIP
     else
         release.chan.pid ->           -- release the monitor
@@ -67,11 +76,11 @@ PROTECTED_PROCESS_READER(pid, chan) =
         m = message                 -- Necessary because of the YIELD call.
     within
         release.chan.pid ->           -- release the monitor
-        READY_YIELD(pid);                   -- yield()
+        YIELD(pid);                   -- yield()
         read.chan.pid!m ->            -- (6) deliver the message to the environment
-        PROTECTED_PROCESS_READER(pid, chan)    -- Recurse to start over (simulate jump to L2)
+        UNRESTRICTED_PROCESS_READER(pid, chan)    -- Recurse to start over (simulate jump to L2)
 
-alphaPROTECTED_PROCESS_READER(pid, chan) = 
+alphaUNRESTRICTED_PROCESS_READER(pid, chan) = 
     union(alphaREAD(chan), 
         {
             start_read.chan.pid, 
@@ -85,29 +94,26 @@ alphaPROTECTED_PROCESS_READER(pid, chan) =
             | v <- Values, np <- Nullable_Processes
         })
 
-PROTECTED_READER_WRITER(pid, pid', chan) = 
-    PROTECTED_PROCESS_WRITER(pid, chan) ||| PROTECTED_PROCESS_READER(pid', chan)
-
-alphaPROTECTED_READER_WRITER(pid, pid', chan) = 
-    union(alphaPROTECTED_PROCESS_WRITER(pid, chan), alphaPROTECTED_PROCESS_READER(pid', chan))
-
-PROTECTED_INFINITE_READER_WRITER(pid, pid', chan) =
+UNRESTRICTED_READER_WRITER(pid, pid', chan) = 
 (
-    PROTECTED_READER_WRITER(pid, pid', chan)
-    [| alphaPROTECTED_CHANNELS |]
-    PROTECTED_CHANNELS
-) \ alphaPROTECTED_CHANNELS
+    (UNRESTRICTED_PROCESS_WRITER(pid, chan) ||| UNRESTRICTED_PROCESS_READER(pid', chan))
+    [| alphaCHANNELS |]
+    CHANNELS
+) \ alphaCHANNELS
 
-PROTECTED_INFINITE_PJ_CHAN_SYSTEM(pid, pid', chan) =
+alphaUNRESTRICTED_READER_WRITER(pid, pid', chan) = 
+    union(alphaUNRESTRICTED_PROCESS_WRITER(pid, chan), alphaUNRESTRICTED_PROCESS_READER(pid', chan))
+
+UNRESTRICTED_PJ_CHAN_SYSTEM(pid, pid', chan) =
 (
-    PROTECTED_INFINITE_READER_WRITER(pid, pid', chan)
+    UNRESTRICTED_READER_WRITER(pid, pid', chan)
     [| alphaREADY_FLAGS |]
     READY_FLAGS
 ) \ alphaREADY_FLAGS
 
-assert PROTECTED_INFINITE_PJ_CHAN_SYSTEM(0, 1, 0) :[deadlock free[FD]]
-assert PROTECTED_INFINITE_PJ_CHAN_SYSTEM(0, 1, 0) :[deterministic[FD]]
-assert PROTECTED_INFINITE_PJ_CHAN_SYSTEM(0, 1, 0) :[divergence free[FD]]
+assert UNRESTRICTED_PJ_CHAN_SYSTEM(0, 1, 0) :[deadlock free[FD]]
+assert UNRESTRICTED_PJ_CHAN_SYSTEM(0, 1, 0) :[deterministic[FD]]
+assert UNRESTRICTED_PJ_CHAN_SYSTEM(0, 1, 0) :[divergence free[FD]]
 
-assert GENERIC_CHANNEL(0, 1, 0) [FD= PROTECTED_INFINITE_PJ_CHAN_SYSTEM(0, 1, 0)
-assert PROTECTED_INFINITE_PJ_CHAN_SYSTEM(0, 1, 0) [FD= GENERIC_CHANNEL(0, 1, 0)
+assert GENERIC_CHANNEL(0, 1, 0) [FD= UNRESTRICTED_PJ_CHAN_SYSTEM(0, 1, 0)
+assert UNRESTRICTED_PJ_CHAN_SYSTEM(0, 1, 0) [FD= GENERIC_CHANNEL(0, 1, 0)

@@ -38,9 +38,16 @@ ALT_USER(pid) =
     read.idx.pid!mess ->    
     ALT_USER(pid)           -- Recurse
 
-alphaALT_USER(pid) = { select.pid, return.c, start_read.c.pid, transmit.c.v, read.c.pid.v | c <- Channels, v <- Values }
+alphaALT_USER(pid) = 
+{ 
+    select.pid, 
+    return.c, 
+    start_read.c.pid, 
+    transmit.c.v, 
+    read.c.pid.v | c <- Channels, v <- Values 
+}
 
-PRIVATE_ALT_SPEC_SYSTEM(pid) = { transmit.c.v | c <- Channels, v <- Values }
+PRIVATE_ALT_SPEC_SYSTEM(pid) = { transmit.c.v, return.c | c <- Channels, v <- Values }
 
 ALT_SPEC_SYSTEM(altpid) =
 (
